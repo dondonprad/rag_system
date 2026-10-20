@@ -1,0 +1,29 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+venv/
+env/
+.env
+
+# Data Mentah & Data Rahasia PUSDIKZI (Zero Data Leakage / Air-Gapped)
+data/raw/*
+!data/raw/.gitkeep
+data/processed/*
+!data/processed/.gitkeep
+
+# ChromaDB Data Storage (Local Container Volume)
+chroma_data/
+.chroma/
+
+# Model Weights Cache
+models/
+.cache/
+huggingface/
+
+# IDE & OS
+.vscode/
+.idea/
+.DS_Store
+*.log
+

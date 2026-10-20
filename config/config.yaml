@@ -1,0 +1,82 @@
+# ==============================================================================
+# Project Emas - Modul RAG Terintegrasi PUSDIKZI
+# Config Master YAML (Sesuai PRD Seksi 3 & 5)
+# ==============================================================================
+
+project:
+  name: "Project Emas - Modul RAG Terintegrasi PUSDIKZI"
+  version: "0.1.0-poc"
+  air_gapped: true
+  zero_data_leakage: true
+
+# Modul Vector Database (ChromaDB)
+chromadb:
+  host: "localhost"
+  port: 8000
+  ssl: false
+  collection_name: "pusdikzi_knowledge_base"
+  distance_function: "cosine"
+  telemetry: false
+  persist_directory: "/chroma/chroma"
+
+# Modul Embedding Engine (Local On-Premise)
+embedding:
+  provider: "sentence-transformers" # Pilihan: sentence-transformers, ollama
+  model_name: "nomic-ai/nomic-embed-text-v1.5"
+  query_prefix: "search_query: "
+  document_prefix: "search_document: "
+  batch_size: 32
+  device: "cpu" # atau "xpu" pada iGPU Intel Arc bila driver sycl/level-zero aktif
+  normalize_embeddings: true
+
+# Modul Ingestion & Text Processing
+ingestion:
+  supported_extensions:
+    - ".pdf"
+    - ".txt"
+    - ".md"
+    - ".docx"
+    - ".doc"
+    - ".xlsx"
+    - ".xls"
+  max_file_size_mb: 100
+  data_raw_dir: "./data/raw"
+  data_processed_dir: "./data/processed"
+  chunking:
+    chunk_size: 500
+    chunk_overlap: 50
+    separators:
+      - "\n\n"
+      - "\n"
+      - ". "
+      - " "
+      - ""
+  sanitization:
+    enable_masking: true
+    mask_patterns:
+      nik: "\\b[0-9]{16}\\b"
+      nrp: "\\b(NRP|NIP)[:\\s]*([0-9]{6,18})\\b"
+      phone: "\\b(\\+62|62|0)8[1-9][0-9]{7,10}\\b"
+      secret_mark: "(?i)(sangat rahasia|rahasia|konfidensial)"
+
+# Mitigasi Memori & Akselerasi Intel Core Ultra 125H (Meteor Lake)
+hardware_mitigation:
+  platform: "Intel Core Ultra 125H (Meteor Lake)"
+  igpu_architecture: "Intel Arc Graphics (7 Xe-cores)"
+  shared_ram_limit_gb: 4.5
+  sycl_flags:
+    SYCL_PI_LEVEL_ZERO_USE_IMMEDIATE_COMMANDLISTS: "1"
+  ollama:
+    OLLAMA_NUM_PARALLEL: 1 # Pembatasan konkurensi agar RAM sistem tidak terkuras
+
+# Document-Level RBAC & Security Classification
+security:
+  enabled: true
+  allowed_classifications:
+    - "PUBLIC"
+    - "INTERNAL"
+    - "RESTRICTED"
+    - "CONFIDENTIAL"
+    - "SECRET"
+  default_classification: "INTERNAL"
+

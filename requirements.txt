@@ -1,0 +1,30 @@
+# ==============================================================================
+# Requirements untuk Project Emas - Modul RAG PUSDIKZI (Fase PoC)
+# On-Premise Air-Gapped & Intel Core Ultra 125H
+# ==============================================================================
+
+# Konfigurasi & Lingkungan
+pyyaml>=6.0
+python-dotenv>=1.0.0
+requests>=2.31.0
+
+# Vector Database Client
+chromadb>=0.4.24
+
+# Parsing Dokumen On-Premise
+pypdf>=4.0.0
+pymupdf>=1.23.0
+python-docx>=1.1.0
+openpyxl>=3.1.0
+xlrd>=2.0.1
+olefile>=0.46
+
+# Embedding & NLP
+sentence-transformers>=2.3.0
+einops>=0.7.0
+torch>=2.1.0
+
+# LangChain Orchestrator
+langchain>=0.1.10
+langchain-community>=0.0.25
+

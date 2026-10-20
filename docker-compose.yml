@@ -1,0 +1,28 @@
+services:
+  chroma:
+    image: chromadb/chroma:latest
+    container_name: pusdikzi-chromadb
+    restart: unless-stopped
+    ports:
+      - "8000:8000"
+    environment:
+      - IS_PERSISTENT=TRUE
+      - PERSIST_DIRECTORY=/data
+      - ANONYMIZED_TELEMETRY=FALSE
+      - ALLOW_RESET=TRUE
+    volumes:
+      - chroma_data:/data
+    healthcheck:
+      test: ["CMD-SHELL", "grep -q '1F40' /proc/net/tcp || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 5s
+    deploy:
+      resources:
+        limits:
+          memory: 1024M
+
+volumes:
+  chroma_data:
+    driver: local
