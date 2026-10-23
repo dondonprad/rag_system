@@ -7,7 +7,7 @@ from config.settings import settings
 logger = logging.getLogger(__name__)
 
 class DocumentLoader:
-    """Loader dokumen lokal PUSDIKZI dari direktori data/raw/."""
+    """Loader dokumen lokal PUSDIKZI dari direktori lokal atau data/raw/."""
 
     def __init__(self, raw_dir: Optional[str] = None):
         self.raw_dir = Path(raw_dir or settings.get("ingestion", {}).get("data_raw_dir", "./data/raw"))
@@ -19,36 +19,31 @@ class DocumentLoader:
         )
 
     def load_file(self, file_path: Path, classification: Optional[str] = None) -> List[DocumentPage]:
-        """Memuat satu file berdasarkan ekstensi dan menyematkan metadata klasifikasi keamanan."""
+        """Memuat satu file berdasarkan ekstensi dan menyematkan metadata mandiri secara otomatis."""
         ext = file_path.suffix.lower()
         if ext not in self.supported_extensions:
             logger.warning(f"Ekstensi {ext} tidak didukung: {file_path.name}")
             return []
 
-        doc_classification = classification or self.default_classification
+        doc_classification = (classification or self.default_classification).lower()
 
         try:
             if ext == ".pdf":
-                pages = DocumentParser.parse_pdf(file_path)
+                pages = DocumentParser.parse_pdf(file_path, classification=doc_classification)
             elif ext == ".txt":
-                pages = DocumentParser.parse_text(file_path)
+                pages = DocumentParser.parse_text(file_path, classification=doc_classification)
             elif ext == ".md":
-                pages = DocumentParser.parse_markdown(file_path)
+                pages = DocumentParser.parse_markdown(file_path, classification=doc_classification)
             elif ext == ".docx":
-                pages = DocumentParser.parse_docx(file_path)
+                pages = DocumentParser.parse_docx(file_path, classification=doc_classification)
             elif ext == ".doc":
-                pages = DocumentParser.parse_doc(file_path)
+                pages = DocumentParser.parse_doc(file_path, classification=doc_classification)
             elif ext == ".xlsx":
-                pages = DocumentParser.parse_xlsx(file_path)
+                pages = DocumentParser.parse_xlsx(file_path, classification=doc_classification)
             elif ext == ".xls":
-                pages = DocumentParser.parse_xls(file_path)
+                pages = DocumentParser.parse_xls(file_path, classification=doc_classification)
             else:
                 return []
-
-            # Tambahkan metadata klasifikasi RBAC dan keamanan
-            for p in pages:
-                p.metadata["classification"] = doc_classification
-                p.metadata["source_path"] = str(file_path.resolve())
 
             return pages
         except Exception as e:
@@ -75,15 +70,17 @@ class DocumentLoader:
         for file_path in files:
             # Periksa klasifikasi dari folder utama atau subfolder (misal: SECRET/...)
             classification = folder_class or self.default_classification
-            rel_parts = file_path.relative_to(dir_to_scan).parts
-            if len(rel_parts) > 1:
-                potential_class = rel_parts[0].upper()
-                if potential_class in ["PUBLIC", "INTERNAL", "RESTRICTED", "CONFIDENTIAL", "SECRET"]:
-                    classification = potential_class
+            try:
+                rel_parts = file_path.relative_to(dir_to_scan).parts
+                if len(rel_parts) > 1:
+                    potential_class = rel_parts[0].upper()
+                    if potential_class in ["PUBLIC", "INTERNAL", "RESTRICTED", "CONFIDENTIAL", "SECRET"]:
+                        classification = potential_class
+            except ValueError:
+                pass
 
             pages = self.load_file(file_path, classification=classification)
             all_pages.extend(pages)
             logger.info(f"Dimuat {len(pages)} bagian/halaman dari {file_path.name} (Akses: {classification})")
 
         return all_pages
-

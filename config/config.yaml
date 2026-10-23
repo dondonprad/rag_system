@@ -25,8 +25,8 @@ embedding:
   model_name: "nomic-ai/nomic-embed-text-v1.5"
   query_prefix: "search_query: "
   document_prefix: "search_document: "
-  batch_size: 32
-  device: "cpu" # atau "xpu" pada iGPU Intel Arc bila driver sycl/level-zero aktif
+  batch_size: 256
+  device: "xpu" # atau "xpu" pada iGPU Intel Arc bila driver sycl/level-zero aktif
   normalize_embeddings: true
 
 # Modul Ingestion & Text Processing
@@ -40,11 +40,14 @@ ingestion:
     - ".xlsx"
     - ".xls"
   max_file_size_mb: 100
-  data_raw_dir: "./data/raw"
+  data_raw_dir: "./data/raw/SECRET"
   data_processed_dir: "./data/processed"
   chunking:
-    chunk_size: 500
-    chunk_overlap: 50
+    unit: "tokens"
+    chunk_size: 256
+    chunk_overlap: 26 # 10% overlapping
+    overlap_ratio: 0.10
+    structure_aware: true
     separators:
       - "\n\n"
       - "\n"

@@ -10,6 +10,15 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 # Muat file .env jika ada
 load_dotenv(BASE_DIR / ".env")
 
+# Mitigasi kestabilan driver level-zero GPU pada CPU
+if os.getenv("EMBEDDING_DEVICE", "cpu").lower() != "xpu":
+    try:
+        import torch
+        if hasattr(torch, "xpu"):
+            torch.xpu.is_available = lambda: False
+    except Exception:
+        pass
+
 CONFIG_FILE = BASE_DIR / "config" / "config.yaml"
 
 def load_config() -> Dict[str, Any]:
@@ -53,11 +62,13 @@ def load_config() -> Dict[str, Any]:
     if "chunking" not in config["ingestion"]:
         config["ingestion"]["chunking"] = {}
     config["ingestion"]["chunking"]["chunk_size"] = int(
-        os.getenv("CHUNK_SIZE", config["ingestion"]["chunking"].get("chunk_size", 500))
+        os.getenv("CHUNK_SIZE", config["ingestion"]["chunking"].get("chunk_size", 256))
     )
     config["ingestion"]["chunking"]["chunk_overlap"] = int(
-        os.getenv("CHUNK_OVERLAP", config["ingestion"]["chunking"].get("chunk_overlap", 50))
+        os.getenv("CHUNK_OVERLAP", config["ingestion"]["chunking"].get("chunk_overlap", 26))
     )
+    config["ingestion"]["chunking"]["unit"] = config["ingestion"]["chunking"].get("unit", "tokens")
+    config["ingestion"]["chunking"]["structure_aware"] = config["ingestion"]["chunking"].get("structure_aware", True)
 
     # Security
     if "security" not in config:

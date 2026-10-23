@@ -11,6 +11,11 @@ requests>=2.31.0
 # Vector Database Client
 chromadb>=0.4.24
 
+# Fast API On-Premise Document Parsing Service
+fastapi>=0.115.0
+python-multipart>=0.0.9
+uvicorn>=0.30.0
+
 # Parsing Dokumen On-Premise
 pypdf>=4.0.0
 pymupdf>=1.23.0

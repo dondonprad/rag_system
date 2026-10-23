@@ -55,8 +55,12 @@ def run_query(query_text: str, n_results: int = 3, classification: str = None):
     else:
         for i, res in enumerate(results, start=1):
             meta = res["metadata"]
-            print(f"[{i}] Dokumen Sumber : {meta.get('file_name')} (Halaman {meta.get('page')})")
-            print(f"    Klasifikasi Akses : {meta.get('classification')}")
+            sumber = meta.get('sumber', meta.get('file_name'))
+            tipe = meta.get('tipe', meta.get('file_type'))
+            halaman = meta.get('halaman', meta.get('page'))
+            klasifikasi = meta.get('klasifikasi', meta.get('classification'))
+            print(f"[{i}] Dokumen Sumber : {sumber} [{tipe}] (Halaman {halaman})")
+            print(f"    Klasifikasi Akses : {klasifikasi}")
             print(f"    Cosine Distance   : {res.get('distance', 0):.4f}")
             print(f"    Kutipan Teks:\n{res.get('content')}")
             print("-" * 60)
