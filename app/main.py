@@ -254,6 +254,69 @@ async def pipeline_endpoint(
         if tmp_path.exists():
             os.remove(tmp_path)
 
+class UpdateIndexRequest(BaseModel):
+    data_dir: Optional[str] = Field("./data/raw", description="Folder yang dipindai")
+    dry_run: Optional[bool] = Field(False, description="Hanya cek status dokumen lama vs baru tanpa ubah DB")
+    clean_deleted: Optional[bool] = Field(True, description="Hapus chunk dari dokumen yang sudah dihapus dari folder")
+    force_all: Optional[bool] = Field(False, description="Paksa proses ulang semua dokumen")
+
+@app.post("/api/v1/update-index", tags=["Incremental Index Update"])
+def update_index_endpoint(req: UpdateIndexRequest):
+    """Pembaruan inkremental database ChromaDB:
+    Membedakan dokumen lama vs baru pada folder yang sama dan hanya memproses dokumen baru/berubah.
+    """
+    from scripts.update_index import (
+        MANIFEST_DEFAULT_PATH,
+        load_manifest,
+        scan_folder_and_classify,
+        run_incremental_update
+    )
+
+    target_path = Path(req.data_dir)
+    if not target_path.exists():
+        raise HTTPException(status_code=404, detail=f"Direktori {req.data_dir} tidak ditemukan.")
+
+    manifest = load_manifest(MANIFEST_DEFAULT_PATH)
+    supported_exts = settings.get("ingestion", {}).get(
+        "supported_extensions", [".pdf", ".txt", ".md", ".docx", ".doc", ".xlsx", ".xls"]
+    )
+
+    new_f, mod_f, unch_f, del_f = scan_folder_and_classify(target_path, manifest, supported_exts)
+
+    if req.dry_run:
+        return {
+            "status": "dry_run",
+            "target_dir": str(target_path.resolve()),
+            "summary": {
+                "total_files": len(new_f) + len(mod_f) + len(unch_f),
+                "new": len(new_f),
+                "modified": len(mod_f),
+                "unchanged": len(unch_f),
+                "deleted": len(del_f)
+            },
+            "new_files": [f["name"] for f in new_f],
+            "modified_files": [f["name"] for f in mod_f],
+            "unchanged_files": [f["name"] for f in unch_f],
+            "deleted_files": del_f
+        }
+
+    run_incremental_update(
+        data_dir=target_path,
+        dry_run=False,
+        force_all=req.force_all or False,
+        clean_deleted=req.clean_deleted if req.clean_deleted is not None else True,
+        output_json=True
+    )
+
+    return {
+        "status": "success",
+        "target_dir": str(target_path.resolve()),
+        "processed_new": len(new_f),
+        "processed_modified": len(mod_f),
+        "skipped_unchanged": len(unch_f),
+        "cleaned_deleted": len(del_f) if req.clean_deleted else 0
+    }
+
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run("app.main:app", host="0.0.0.0", port=8080, reload=False)

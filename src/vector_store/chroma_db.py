@@ -93,6 +93,25 @@ class ChromaVectorStore:
 
         return total_upserted
 
+    def delete_by_source(self, source_name: str) -> int:
+        """Menghapus seluruh chunk dokumen berdasarkan nama file sumber (berguna untuk update dokumen termodifikasi)."""
+        count_before = self.collection.count()
+        try:
+            self.collection.delete(where={"sumber": source_name})
+        except Exception as e:
+            logger.debug(f"Hapus sumber '{source_name}': {e}")
+
+        try:
+            self.collection.delete(where={"file_name": source_name})
+        except Exception as e:
+            logger.debug(f"Hapus file_name '{source_name}': {e}")
+
+        count_after = self.collection.count()
+        deleted = max(0, count_before - count_after)
+        if deleted > 0:
+            logger.info(f"Berhasil menghapus {deleted} chunk lama untuk '{source_name}'.")
+        return deleted
+
     def search_similarity(
         self,
         query_embedding: List[float],

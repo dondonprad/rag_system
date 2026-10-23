@@ -197,14 +197,17 @@ class TextChunker:
 
         table_chunks: List[str] = []
         current_rows: List[str] = []
+        current_tokens = header_tokens
 
         for row in data_rows:
-            candidate = header_prefix + "\n".join(current_rows + [row])
-            if self.tokenizer.count_tokens(candidate) > self.chunk_size and current_rows:
+            r_tokens = self.tokenizer.count_tokens(row)
+            if current_tokens + r_tokens > self.chunk_size and current_rows:
                 table_chunks.append(header_prefix + "\n".join(current_rows))
                 current_rows = [row]
+                current_tokens = header_tokens + r_tokens
             else:
                 current_rows.append(row)
+                current_tokens += r_tokens
 
         if current_rows:
             table_chunks.append(header_prefix + "\n".join(current_rows))

@@ -38,7 +38,7 @@ def run_query(query_text: str, n_results: int = 3, classification: str = None):
     query_vector = engine.embed_query(query_text)
 
     # 3. Filter RBAC jika ditentukan
-    allowed_classes = [classification] if classification else None
+    allowed_classes = [classification.upper()] if classification else None
 
     # 4. Pencarian kesamaan vektor
     results = vector_store.search_similarity(

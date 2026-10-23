@@ -1,6 +1,25 @@
+import os
 import logging
 from typing import List, Optional
 import requests
+
+# Pastikan offline dan mitigasi crash driver level-zero
+os.environ["HF_HUB_OFFLINE"] = "1"
+os.environ["TRANSFORMERS_OFFLINE"] = "1"
+
+try:
+    import torch
+    if hasattr(torch, "xpu"):
+        torch.xpu.is_available = lambda: False
+except Exception:
+    pass
+
+try:
+    import transformers.utils.import_utils
+    transformers.utils.import_utils.is_torch_xpu_available = lambda check_device=False: False
+except Exception:
+    pass
+
 from config.settings import settings
 
 logger = logging.getLogger(__name__)
@@ -32,10 +51,33 @@ class EmbeddingEngine:
     def _get_sentence_transformer_model(self):
         """Lazy load SentenceTransformer model."""
         if self._model is None:
+            import os
+            # Pastikan mode offline untuk menjamin zero data leakage dan mencegah network call timeout
+            os.environ["HF_HUB_OFFLINE"] = "1"
+            os.environ["TRANSFORMERS_OFFLINE"] = "1"
+
+            # Proteksi terhadap issue crash driver level-zero pada CPU
+            if str(self.device).lower() != "xpu":
+                try:
+                    import torch
+                    if hasattr(torch, "xpu"):
+                        torch.xpu.is_available = lambda: False
+                except Exception:
+                    pass
+
             from sentence_transformers import SentenceTransformer
             logger.info(f"Memuat model embedding lokal: {self.model_name} pada device: {self.device}")
             # trust_remote_code=True diperlukan untuk nomic-embed-text
-            self._model = SentenceTransformer(self.model_name, trust_remote_code=True, device=self.device)
+            # model_kwargs={'local_files_only': True} untuk air-gapped on-premise
+            try:
+                self._model = SentenceTransformer(
+                    self.model_name,
+                    trust_remote_code=True,
+                    device=self.device,
+                    model_kwargs={"local_files_only": True}
+                )
+            except Exception:
+                self._model = SentenceTransformer(self.model_name, trust_remote_code=True, device=self.device)
         return self._model
 
     def _embed_via_sentence_transformers(self, texts: List[str]) -> List[List[float]]:

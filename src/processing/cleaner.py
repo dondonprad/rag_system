@@ -24,9 +24,9 @@ class TextCleaner:
     def normalize_format(self, text: str) -> str:
         """Normalisasi format teks:
         - Unicode NFKC (standarisasi karakter aksen, bentuk kompatibel)
-        - Konversi tanda kutip, tanda hubung, dan simbol ke format standar
-        - Normalisasi bullet point
-        - Hapus zero-width characters dan karakter kontrol anomali
+        - Pembersihan simbol aneh, replacement char, dan karakter tak terlihat
+        - Konversi tab, non-breaking space, dan whitespace anomali ke spasi standar
+        - Konversi tanda kutip, tanda hubung, dan bullet point ke format standar
         """
         if not text:
             return ""
@@ -34,40 +34,68 @@ class TextCleaner:
         # 1. Unicode NFKC Normalization
         text = unicodedata.normalize("NFKC", text)
 
-        # 2. Hapus zero-width characters dan format invisible
-        text = re.sub(r"[\u200B-\u200D\uFEFF\u2060\u00AD]", "", text)
-        
-        # 3. Hapus control chars kecuali newline (\n), tab (\t), dan carriage return (\r)
+        # 2. Hapus zero-width characters, format invisible, BOM, dan replacement character (\uFFFD)
+        text = re.sub(r"[\u200B-\u200F\uFEFF\u2060\u00AD\uFFFD]", "", text)
+
+        # 3. Konversi non-breaking space (\u00A0) dan variasi spasi unicode ke spasi biasa
+        text = re.sub(r"[\u00A0\u1680\u2000-\u200A\u202F\u205F\u3000]", " ", text)
+
+        # 4. Standardisasi carriage return & line feed
+        text = text.replace("\r\n", "\n").replace("\r", "\n")
+
+        # 5. Konversi tab (\t) menjadi spasi agar tidak memicu simbol tab/panah aneh
+        text = text.replace("\t", " ")
+
+        # 6. Hapus control characters (kecuali newline \n)
         text = re.sub(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f-\x9f]", "", text)
 
-        # 4. Standardisasi tanda kutip (quotes)
+        # 7. Hapus karakter sampah biner berulang (seperti padding OLE 'ÿÿÿÿ' atau sampah encoding)
+        text = re.sub(r"[ÿ\x80-\xff]{2,}", "", text)
+
+        # 8. Standardisasi tanda kutip (quotes)
         text = re.sub(r"[\u201C\u201D\u00AB\u00BB\u201E\u201F]", '"', text)
         text = re.sub(r"[\u2018\u2019\u201A\u201B\u02BC\u02BB]", "'", text)
 
-        # 5. Standardisasi tanda strip / dash (en-dash, em-dash, horizontal bar)
+        # 9. Standardisasi tanda strip / dash (en-dash, em-dash, horizontal bar) dan slash
         text = re.sub(r"[\u2013\u2014\u2015\u2212]", "-", text)
+        text = text.replace("⁄", "/")
 
-        # 6. Standardisasi ellipsis
+        # 10. Standardisasi ellipsis
         text = text.replace("…", "...")
 
-        # 7. Standardisasi simbol bullet point menjadi format markdown list "- "
+        # 11. Standardisasi simbol bullet point menjadi format markdown list "- "
         text = re.sub(r"(?m)^[\t ]*[•●▪►◦✦]\s*", "- ", text)
 
-        # 8. Normalisasi spasi horizontal (kecuali newline)
-        text = re.sub(r"[^\S\r\n]+", " ", text)
+        # 12. Normalisasi spasi horizontal berurutan (kecuali newline)
+        text = re.sub(r"[^\S\n]+", " ", text)
 
         return text
 
     def correct_text(self, text: str) -> str:
         """Koreksi teks otomatis:
         - Perbaikan typographic ligatures (fi, fl, ff, ffi, ffl)
+        - Koreksi encoding Mojibake (karakter UTF-8 yang salah didecode)
         - De-hyphenation kata terpotong di akhir baris (misal: 'pemerin-\ntah' -> 'pemerintah')
         - Koreksi spasi di sekitar tanda baca (koma, titik, titik koma)
         """
         if not text:
             return ""
 
-        # 1. Ligatures replacement
+        # 1. Perbaikan Mojibake umum (UTF-8 diinterpretasikan sebagai CP1252 / Latin-1)
+        mojibake_map = {
+            "â€™": "'",
+            "â€˜": "'",
+            "â€œ": '"',
+            "â€": '"',
+            "â€“": "-",
+            "â€”": "-",
+            "Â ": " ",
+            "Â": "",
+        }
+        for bad_s, good_s in mojibake_map.items():
+            text = text.replace(bad_s, good_s)
+
+        # 2. Ligatures replacement
         ligatures = {
             "ﬁ": "fi",
             "ﬂ": "fl",
@@ -80,14 +108,14 @@ class TextCleaner:
         for lig, repl in ligatures.items():
             text = text.replace(lig, repl)
 
-        # 2. De-hyphenation (kata yang terputus dengan tanda strip di akhir baris)
+        # 3. De-hyphenation (kata yang terputus dengan tanda strip di akhir baris)
         # Contoh: 'pemerin-\ntah' -> 'pemerintah', 'kegia-\n tan' -> 'kegiatan'
         text = re.sub(r"([A-Za-z]{2,})-\n\s*([a-z]{2,})", r"\1\2", text)
 
-        # 3. Koreksi spasi berlebih sebelum tanda baca (abaikan pipa tabel markdown '|')
+        # 4. Koreksi spasi berlebih sebelum tanda baca (abaikan pipa tabel markdown '|')
         text = re.sub(r" +([,;:\.\?!])", r"\1", text)
 
-        # 4. Pastikan spasi setelah tanda baca jika langsung diikuti huruf kapital
+        # 5. Pastikan spasi setelah tanda baca jika langsung diikuti huruf kapital
         # Contoh: "selesai.Lanjut" -> "selesai. Lanjut", "hari,besok" -> "hari, besok"
         text = re.sub(r"([a-z0-9])\.([A-Z])", r"\1. \2", text)
         text = re.sub(r"([a-zA-Z0-9]),([a-zA-Z])", r"\1, \2", text)

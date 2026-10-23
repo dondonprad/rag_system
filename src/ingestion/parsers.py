@@ -391,27 +391,59 @@ class DocumentParser:
 
     @staticmethod
     def parse_doc(file_path: Path, classification: str = "internal") -> List[DocumentPage]:
-        """Mengekstrak teks dari file Microsoft Word 97-2003 OLE (.doc)."""
+        """Mengekstrak teks dari file Microsoft Word 97-2003 OLE (.doc).
+        Menggunakan File Information Block (FIB) offsets (fcMin dan ccpText)
+        untuk mengekstrak teks asli secara presisi tanpa menarik data biner gambar (PNG/JPEG)
+        atau karakter sampah 'ÿÿÿÿ' dari stream OLE.
+        """
+        import struct
         import olefile
 
         try:
             ole = olefile.OleFileIO(str(file_path))
             if not ole.exists("WordDocument"):
+                ole.close()
                 return []
 
             stream = ole.openstream("WordDocument")
             data = stream.read()
             ole.close()
 
-            # Ekstrak rangkaian teks yang valid (CP1252 / ASCII)
-            raw_segments = re.findall(b"[\x20-\x7e\r\n\t\xa0-\xff]{4,}", data)
-            cleaned_segments = []
-            for seg in raw_segments:
-                decoded = seg.decode("latin1", errors="ignore").strip()
-                if len(decoded) >= 4 and not re.match(r"^[\x00-\x1f\x7f]+$", decoded):
-                    cleaned_segments.append(decoded)
+            full_content = ""
 
-            full_content = "\n".join(cleaned_segments).strip()
+            # 1. Coba baca struktur FIB (File Information Block) MS-DOC resmi
+            if len(data) >= 512:
+                wIdent = struct.unpack("<H", data[0:2])[0]
+                if wIdent in (0xA5EC, 0xA5DC):
+                    fcMin = struct.unpack("<I", data[0x0018:0x001C])[0]
+                    ccpText = struct.unpack("<I", data[0x004C:0x0050])[0]
+
+                    if 0 < fcMin < len(data) and 0 < ccpText <= len(data) - fcMin:
+                        text_slice = data[fcMin : fcMin + ccpText]
+                        decoded = text_slice.decode("latin1", errors="ignore")
+                        # Konversi karakter kontrol sel tabel Word dan pemisah
+                        decoded = decoded.replace("\x07", " | ")  # Word table cell mark
+                        decoded = decoded.replace("\x0c", "\n")    # Page break
+                        decoded = decoded.replace("\x0b", "\n")    # Line break
+                        decoded = decoded.replace("\r\n", "\n").replace("\r", "\n")
+                        decoded = decoded.replace("\t", " ")      # Tab stop
+                        # Hapus karakter kontrol dan null bytes
+                        decoded = re.sub(r"[\x00-\x08\x0e-\x1f\x7f-\x9f]", "", decoded)
+                        full_content = decoded.strip()
+
+            # 2. Fallback jika FIB tidak terbaca
+            if not full_content:
+                raw_segments = re.findall(b"[\x20-\x7e\r\n\t]{6,}", data)
+                valid_lines = []
+                for seg in raw_segments:
+                    line = seg.decode("latin1", errors="ignore").strip()
+                    # Filter OLE headers & metadata signatures
+                    if any(sig in line for sig in ["Normal.dot", "Times New Roman", "bjbj", "IEND", "JFIF"]):
+                        continue
+                    if re.search(r"[a-zA-Z]{3,}", line):
+                        valid_lines.append(line.replace("\t", " "))
+                full_content = "\n".join(valid_lines).strip()
+
             if not full_content:
                 return []
 
@@ -426,7 +458,8 @@ class DocumentParser:
 
             return [DocumentPage(content=full_content, page_number=1, metadata=metadata)]
         except Exception as e:
-            raise RuntimeError(f"Gagal mengekstrak teks dari file .doc ({file_path.name}): {e}")
+            logger.error(f"Gagal mengekstrak teks dari file .doc ({file_path.name}): {e}")
+            return []
 
     @staticmethod
     def parse_text(file_path: Path, classification: str = "internal") -> List[DocumentPage]:
