@@ -327,9 +327,71 @@ class DocumentParser:
     @staticmethod
     def parse_xls(file_path: Path, classification: str = "internal") -> List[DocumentPage]:
         """Mengekstrak lembar kerja Excel 97-2003 (.xls) ke format tabel Markdown dan teks naratif baris."""
+        import struct
         import xlrd
+        import xlrd.book
 
-        wb = xlrd.open_workbook(str(file_path), formatting_info=False)
+        if not getattr(xlrd.book, "_patched_safe_sst", False):
+            _orig_unpack = xlrd.book.unpack_SST_table
+
+            def _safe_unpack_SST_table(datatab, nstrings):
+                try:
+                    return _orig_unpack(datatab, nstrings)
+                except (AssertionError, IndexError):
+                    datainx, ndatas = 0, len(datatab)
+                    data, datalen, pos = datatab[0], len(datatab[0]), 8
+                    strings, richtext_runs = [], {}
+                    while datainx < ndatas and len(strings) < nstrings:
+                        if pos >= datalen:
+                            datainx += 1
+                            if datainx >= ndatas:
+                                break
+                            data, datalen, pos = datatab[datainx], len(datatab[datainx]), 0
+                        try:
+                            nchars = xlrd.timemachine.ORD(data[pos]) | (xlrd.timemachine.ORD(data[pos + 1]) << 8)
+                            options = xlrd.timemachine.ORD(data[pos + 2])
+                            pos += 3
+                            rtcount = (xlrd.timemachine.ORD(data[pos]) | (xlrd.timemachine.ORD(data[pos + 1]) << 8)) if (options & 0x08) else 0
+                            if options & 0x08:
+                                pos += 2
+                            phosz = struct.unpack("<i", data[pos : pos + 4])[0] if (options & 0x04) else 0
+                            if options & 0x04:
+                                pos += 4
+                            accstrg, charsgot = "", 0
+                            while True:
+                                charsneed = nchars - charsgot
+                                if options & 0x01:
+                                    charsavail = min((datalen - pos) >> 1, charsneed)
+                                    accstrg += data[pos : pos + 2 * charsavail].decode("utf_16_le", errors="replace")
+                                    pos += 2 * charsavail
+                                else:
+                                    charsavail = min(datalen - pos, charsneed)
+                                    accstrg += data[pos : pos + charsavail].decode("latin_1", errors="replace")
+                                    pos += charsavail
+                                charsgot += charsavail
+                                if charsgot == nchars:
+                                    break
+                                datainx += 1
+                                if datainx >= ndatas:
+                                    break
+                                data, datalen = datatab[datainx], len(datatab[datainx])
+                                options, pos = xlrd.timemachine.ORD(data[0]), 1
+                            pos += 4 * rtcount + phosz
+                            while pos >= datalen and datainx + 1 < ndatas:
+                                pos -= datalen
+                                datainx += 1
+                                data, datalen = datatab[datainx], len(datatab[datainx])
+                            strings.append(accstrg)
+                        except Exception:
+                            break
+                    if len(strings) < nstrings:
+                        strings.extend([""] * (nstrings - len(strings)))
+                    return strings, richtext_runs
+
+            xlrd.book.unpack_SST_table = _safe_unpack_SST_table
+            xlrd.book._patched_safe_sst = True
+
+        wb = xlrd.open_workbook(str(file_path), formatting_info=False, ignore_workbook_corruption=True)
         pages: List[DocumentPage] = []
         total_sheets = wb.nsheets
 

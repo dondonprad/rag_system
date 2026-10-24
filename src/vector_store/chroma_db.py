@@ -16,28 +16,63 @@ class ChromaVectorStore:
         self,
         host: Optional[str] = None,
         port: Optional[int] = None,
-        collection_name: Optional[str] = None
+        collection_name: Optional[str] = None,
+        persist_directory: Optional[str] = None
     ):
+        import os
         chroma_cfg = settings.get("chromadb", {})
         self.host = host or chroma_cfg.get("host", "localhost")
         self.port = port or chroma_cfg.get("port", 8000)
         self.collection_name = collection_name or chroma_cfg.get("collection_name", "pusdikzi_knowledge_base")
         self.distance_function = chroma_cfg.get("distance_function", "cosine")
+        self.persist_directory = persist_directory or os.getenv("CHROMA_PERSIST_DIR", "./data/chroma_colab")
+        self.mode = os.getenv("CHROMA_MODE", "auto").lower()
 
-        self.client = chromadb.HttpClient(
-            host=self.host,
-            port=self.port,
-            settings=Settings(anonymized_telemetry=False)
-        )
-        self.collection = self.get_or_create_collection(self.collection_name)
+        self.client = None
+        self.collection = None
+
+        if self.mode == "persistent":
+            logger.info(f"Menggunakan ChromaDB PersistentClient pada direktori: {self.persist_directory}")
+            self.client = chromadb.PersistentClient(
+                path=self.persist_directory,
+                settings=Settings(anonymized_telemetry=False, allow_reset=True)
+            )
+            self.collection = self.get_or_create_collection(self.collection_name)
+        else:
+            try:
+                http_client = chromadb.HttpClient(
+                    host=self.host,
+                    port=self.port,
+                    settings=Settings(anonymized_telemetry=False)
+                )
+                http_client.heartbeat()
+                self.client = http_client
+                self.mode = "http"
+                self.collection = self.get_or_create_collection(self.collection_name)
+            except Exception as e:
+                if self.mode == "auto" and os.getenv("RUNTIME_ENV", "").lower() == "colab_gpu":
+                    logger.warning(
+                        f"Server HTTP ChromaDB ({self.host}:{self.port}) belum aktif ({e}). "
+                        f"Beralih otomatis ke ChromaDB PersistentClient di '{self.persist_directory}'..."
+                    )
+                    self.client = chromadb.PersistentClient(
+                        path=self.persist_directory,
+                        settings=Settings(anonymized_telemetry=False, allow_reset=True)
+                    )
+                    self.mode = "persistent"
+                    self.collection = self.get_or_create_collection(self.collection_name)
+                else:
+                    logger.error(f"Gagal menginisialisasi koneksi ke ChromaDB pada {self.host}:{self.port} - {e}")
 
     def is_healthy(self) -> bool:
-        """Memeriksa kesehatan koneksi ke container ChromaDB Docker."""
+        """Memeriksa kesehatan koneksi ke ChromaDB (HTTP Docker maupun PersistentClient Colab)."""
+        if self.client is None:
+            return False
         try:
             res = self.client.heartbeat()
             return res > 0
         except Exception as e:
-            logger.error(f"Gagal terhubung ke ChromaDB Docker pada {self.host}:{self.port} - {e}")
+            logger.error(f"Gagal terhubung ke ChromaDB pada {self.host}:{self.port} - {e}")
             return False
 
     def get_or_create_collection(self, collection_name: str):

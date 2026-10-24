@@ -4,9 +4,9 @@ import logging
 from typing import List, Optional
 import requests
 
-# Pastikan offline dan mitigasi crash driver level-zero
-os.environ["HF_HUB_OFFLINE"] = "1"
-os.environ["TRANSFORMERS_OFFLINE"] = "1"
+# Atur mode offline/online berdasarkan konfigurasi .env (default offline kecuali diset 0 seperti di Google Colab)
+os.environ.setdefault("HF_HUB_OFFLINE", os.getenv("HF_HUB_OFFLINE", "1"))
+os.environ.setdefault("TRANSFORMERS_OFFLINE", os.getenv("TRANSFORMERS_OFFLINE", "1"))
 
 # Hanya proteksi XPU jika user tidak secara eksplisit memilih XPU
 if os.getenv("EMBEDDING_DEVICE", "cpu").lower() != "xpu":
@@ -79,10 +79,12 @@ class EmbeddingEngine:
             pass
 
     def _get_sentence_transformer_model(self):
-        """Lazy load SentenceTransformer model dengan fallback CPU jika device XPU gagal."""
+        """Lazy load SentenceTransformer model dengan dukungan CUDA (Google Colab), XPU, dan fallback CPU."""
         if self._model is None:
-            os.environ["HF_HUB_OFFLINE"] = "1"
-            os.environ["TRANSFORMERS_OFFLINE"] = "1"
+            offline_flag = os.getenv("HF_HUB_OFFLINE", "0" if str(self.device).lower() == "cuda" else "1")
+            os.environ["HF_HUB_OFFLINE"] = offline_flag
+            os.environ["TRANSFORMERS_OFFLINE"] = os.getenv("TRANSFORMERS_OFFLINE", offline_flag)
+            local_only = offline_flag == "1"
 
             if str(self.device).lower() != "xpu":
                 try:
@@ -92,34 +94,65 @@ class EmbeddingEngine:
                 except Exception:
                     pass
 
+            # Validasi ketersediaan CUDA jika device disetel ke cuda
+            if str(self.device).lower().startswith("cuda"):
+                try:
+                    import torch
+                    if not torch.cuda.is_available():
+                        logger.warning(
+                            "Device 'cuda' dipilih tetapi GPU NVIDIA CUDA tidak terdeteksi pada runtime ini. "
+                            "Pastikan Runtime Google Colab sudah disetel ke GPU (T4/L4/A100). Beralih ke 'cpu'..."
+                        )
+                        self.device = "cpu"
+                except Exception:
+                    self.device = "cpu"
+
+            from transformers import PreTrainedModel
+            if not hasattr(PreTrainedModel, "get_extended_attention_mask"):
+                def _nomic_get_extended_attention_mask(model_self, attention_mask, input_shape, device_or_dtype=None):
+                    if attention_mask is None:
+                        return None
+                    if attention_mask.dim() == 3:
+                        ext_mask = attention_mask[:, None, :, :]
+                    elif attention_mask.dim() == 2:
+                        ext_mask = attention_mask[:, None, None, :]
+                    else:
+                        ext_mask = attention_mask
+                    ext_mask = ext_mask.to(dtype=getattr(model_self, "dtype", None))
+                    return (1.0 - ext_mask) * -10000.0
+                PreTrainedModel.get_extended_attention_mask = _nomic_get_extended_attention_mask
+
             from sentence_transformers import SentenceTransformer
-            logger.info(f"Memuat model embedding lokal: {self.model_name} pada device: {self.device}")
+            logger.info(f"Memuat model embedding: {self.model_name} pada device: {self.device} (local_files_only={local_only})")
             try:
                 self._model = SentenceTransformer(
                     self.model_name,
                     trust_remote_code=True,
                     device=self.device,
-                    model_kwargs={"local_files_only": True}
+                    model_kwargs={"local_files_only": local_only}
                 )
             except Exception as e:
                 err_msg = str(e).lower()
-                if "out of memory" in err_msg or str(self.device).lower() == "xpu":
+                if "out of memory" in err_msg or str(self.device).lower() in ("xpu", "cuda"):
                     logger.warning(
                         f"Gagal memuat model embedding pada device '{self.device}' ({e}). "
-                        "Mengalihkan (fallback) secara otomatis ke device 'cpu'..."
+                        "Mencoba mengunduh ulang tanpa batasan local_files_only atau fallback ke 'cpu'..."
                     )
                     self._empty_accelerator_cache()
-                    self.device = "cpu"
                     try:
+                        os.environ["HF_HUB_OFFLINE"] = "0"
+                        os.environ["TRANSFORMERS_OFFLINE"] = "0"
                         self._model = SentenceTransformer(
                             self.model_name,
                             trust_remote_code=True,
-                            device="cpu",
-                            model_kwargs={"local_files_only": True}
+                            device=self.device
                         )
                     except Exception:
+                        self.device = "cpu"
                         self._model = SentenceTransformer(self.model_name, trust_remote_code=True, device="cpu")
                 else:
+                    os.environ["HF_HUB_OFFLINE"] = "0"
+                    os.environ["TRANSFORMERS_OFFLINE"] = "0"
                     self._model = SentenceTransformer(self.model_name, trust_remote_code=True, device=self.device)
         return self._model
 
