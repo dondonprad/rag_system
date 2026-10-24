@@ -251,7 +251,9 @@ def run_incremental_update(
     clean_deleted: bool = False,
     override_classification: Optional[str] = None,
     manifest_path: Optional[Path] = None,
-    output_json: bool = False
+    output_json: bool = False,
+    device: Optional[str] = None,
+    batch_size: Optional[int] = None
 ):
     manifest_file = manifest_path or MANIFEST_DEFAULT_PATH
     manifest = load_manifest(manifest_file)
@@ -347,7 +349,7 @@ def run_incremental_update(
         loader.default_classification = override_classification.upper()
 
     chunker = TextChunker()
-    engine = EmbeddingEngine()
+    engine = EmbeddingEngine(device=device, batch_size=batch_size)
 
     total_chunks_added = 0
     start_time = time.time()
@@ -418,6 +420,10 @@ def run_incremental_update(
         save_manifest(manifest, manifest_file)
         logger.info(f"  -> Sukses mengindeks {len(chunks)} chunks baru untuk '{f_name}'.")
 
+        # Bebaskan VRAM/cache XPU setelah setiap dokumen selesai
+        if hasattr(engine, "_empty_accelerator_cache"):
+            engine._empty_accelerator_cache()
+
     elapsed = time.time() - start_time
     stats = vector_store.get_stats()
 
@@ -470,6 +476,8 @@ Contoh Penggunaan:
     parser.add_argument("--force", action="store_true", help="Paksa indeks ulang semua dokumen")
     parser.add_argument("--clean-deleted", action="store_true", help="Hapus chunk dari dokumen yang sudah tidak ada di folder")
     parser.add_argument("--classification", type=str, default=None, help="Paksa klasifikasi RBAC tertentu")
+    parser.add_argument("--device", type=str, default=None, help="Device embedding: xpu atau cpu (default dari config)")
+    parser.add_argument("--batch-size", type=int, default=None, help="Batch size embedding (default: 16 untuk mencegah XPU OOM)")
     parser.add_argument("--json", action="store_true", help="Output laporan dalam format JSON")
 
     args = parser.parse_args()
@@ -480,6 +488,8 @@ Contoh Penggunaan:
         force_all=args.force,
         clean_deleted=args.clean_deleted,
         override_classification=args.classification,
-        output_json=args.json
+        output_json=args.json,
+        device=args.device,
+        batch_size=args.batch_size
     )
 

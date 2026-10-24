@@ -22,7 +22,13 @@ logging.basicConfig(
 )
 logger = logging.getLogger("build_index")
 
-def run_indexing(data_dir: Path, reset_collection: bool = False, override_classification: str = None):
+def run_indexing(
+    data_dir: Path,
+    reset_collection: bool = False,
+    override_classification: str = None,
+    device: str = None,
+    batch_size: int = None
+):
     logger.info("=== Memulai Pipeline Indexing Dokumen PUSDIKZI (Project Emas) ===")
     start_time = time.time()
 
@@ -80,7 +86,7 @@ def run_indexing(data_dir: Path, reset_collection: bool = False, override_classi
     # 4. Generate Embedding
     emb_cfg = settings.get("embedding", {})
     logger.info(f"Menginisialisasi Embedding Engine (Model: {emb_cfg.get('model_name')})...")
-    engine = EmbeddingEngine()
+    engine = EmbeddingEngine(device=device, batch_size=batch_size)
     
     texts_to_embed = [c.text for c in chunks]
     logger.info(f"Memproses kalkulasi {len(texts_to_embed)} vector embedding secara lokal (Zero Data Leakage)...")
@@ -92,6 +98,10 @@ def run_indexing(data_dir: Path, reset_collection: bool = False, override_classi
     # 5. Simpan ke ChromaDB Docker
     logger.info("Menyimpan chunks dan vektor ke ChromaDB...")
     total_stored = vector_store.upsert_chunks(chunks, embeddings)
+
+    # Bebaskan cache VRAM accelerator
+    if hasattr(engine, "_empty_accelerator_cache"):
+        engine._empty_accelerator_cache()
 
     # 6. Ringkasan
     elapsed = time.time() - start_time
@@ -126,8 +136,26 @@ if __name__ == "__main__":
         default=None,
         help="Paksa klasifikasi keamanan RBAC (misal: SECRET, INTERNAL, PUBLIC)"
     )
+    parser.add_argument(
+        "--device",
+        type=str,
+        default=None,
+        help="Device embedding: xpu atau cpu (default dari config)"
+    )
+    parser.add_argument(
+        "--batch-size",
+        type=int,
+        default=None,
+        help="Batch size embedding (default: 16 untuk mencegah XPU OOM)"
+    )
     args = parser.parse_args()
 
     data_path = Path(args.data_dir)
-    run_indexing(data_path, reset_collection=args.reset, override_classification=args.classification)
+    run_indexing(
+        data_path,
+        reset_collection=args.reset,
+        override_classification=args.classification,
+        device=args.device,
+        batch_size=args.batch_size
+    )
 

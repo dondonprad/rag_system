@@ -1,4 +1,5 @@
 import os
+import gc
 import logging
 from typing import List, Optional
 import requests
@@ -7,18 +8,20 @@ import requests
 os.environ["HF_HUB_OFFLINE"] = "1"
 os.environ["TRANSFORMERS_OFFLINE"] = "1"
 
-try:
-    import torch
-    if hasattr(torch, "xpu"):
-        torch.xpu.is_available = lambda: False
-except Exception:
-    pass
+# Hanya proteksi XPU jika user tidak secara eksplisit memilih XPU
+if os.getenv("EMBEDDING_DEVICE", "cpu").lower() != "xpu":
+    try:
+        import torch
+        if hasattr(torch, "xpu"):
+            torch.xpu.is_available = lambda: False
+    except Exception:
+        pass
 
-try:
-    import transformers.utils.import_utils
-    transformers.utils.import_utils.is_torch_xpu_available = lambda check_device=False: False
-except Exception:
-    pass
+    try:
+        import transformers.utils.import_utils
+        transformers.utils.import_utils.is_torch_xpu_available = lambda check_device=False: False
+    except Exception:
+        pass
 
 from config.settings import settings
 
@@ -27,6 +30,7 @@ logger = logging.getLogger(__name__)
 class EmbeddingEngine:
     """Mesin embedding on-premise untuk dokumen dan query (Zero Data Leakage).
     Mendukung Nomic Embed Text v1.5 dengan prefix task khusus, sentence-transformers, atau Ollama lokal.
+    Dilengkapi manajemen memori XPU/iGPU (Intel Arc) otomatis untuk mencegah Out of Memory.
     """
 
     def __init__(
@@ -39,24 +43,47 @@ class EmbeddingEngine:
         emb_cfg = settings.get("embedding", {})
         self.model_name = model_name or emb_cfg.get("model_name", "nomic-ai/nomic-embed-text-v1.5")
         self.provider = provider or emb_cfg.get("provider", "sentence-transformers")
-        self.device = device or emb_cfg.get("device", "cpu")
-        self.batch_size = batch_size or emb_cfg.get("batch_size", 32)
+        self.device = str(device or emb_cfg.get("device", "cpu"))
         
+        # Default batch_size aman: 16 untuk XPU (mencegah OOM alokasi buffer besar pada shared iGPU RAM)
+        configured_bs = batch_size or emb_cfg.get("batch_size", 16)
+        try:
+            self.batch_size = int(configured_bs)
+        except (ValueError, TypeError):
+            self.batch_size = 16
+
+        # Batasi batch_size pada XPU agar tidak memicu alokasi tensor contiguous raksasa (>2GB)
+        if self.device.lower() == "xpu" and self.batch_size > 32:
+            logger.info(
+                f"Batch size {self.batch_size} terlalu besar untuk shared VRAM Intel Arc iGPU. "
+                "Menyesuaikan batch_size ke 16 untuk mencegah XPU Out of Memory."
+            )
+            self.batch_size = 16
+
         self.doc_prefix = emb_cfg.get("document_prefix", "search_document: ")
         self.query_prefix = emb_cfg.get("query_prefix", "search_query: ")
         self.normalize = emb_cfg.get("normalize_embeddings", True)
 
         self._model = None
 
+    def _empty_accelerator_cache(self):
+        """Membebaskan cache VRAM pada XPU/CUDA dan memicu garbage collection."""
+        gc.collect()
+        try:
+            import torch
+            if hasattr(torch, "xpu"):
+                torch.xpu.empty_cache()
+            elif hasattr(torch, "cuda") and torch.cuda.is_available():
+                torch.cuda.empty_cache()
+        except Exception:
+            pass
+
     def _get_sentence_transformer_model(self):
-        """Lazy load SentenceTransformer model."""
+        """Lazy load SentenceTransformer model dengan fallback CPU jika device XPU gagal."""
         if self._model is None:
-            import os
-            # Pastikan mode offline untuk menjamin zero data leakage dan mencegah network call timeout
             os.environ["HF_HUB_OFFLINE"] = "1"
             os.environ["TRANSFORMERS_OFFLINE"] = "1"
 
-            # Proteksi terhadap issue crash driver level-zero pada CPU
             if str(self.device).lower() != "xpu":
                 try:
                     import torch
@@ -67,8 +94,6 @@ class EmbeddingEngine:
 
             from sentence_transformers import SentenceTransformer
             logger.info(f"Memuat model embedding lokal: {self.model_name} pada device: {self.device}")
-            # trust_remote_code=True diperlukan untuk nomic-embed-text
-            # model_kwargs={'local_files_only': True} untuk air-gapped on-premise
             try:
                 self._model = SentenceTransformer(
                     self.model_name,
@@ -76,19 +101,102 @@ class EmbeddingEngine:
                     device=self.device,
                     model_kwargs={"local_files_only": True}
                 )
-            except Exception:
-                self._model = SentenceTransformer(self.model_name, trust_remote_code=True, device=self.device)
+            except Exception as e:
+                err_msg = str(e).lower()
+                if "out of memory" in err_msg or str(self.device).lower() == "xpu":
+                    logger.warning(
+                        f"Gagal memuat model embedding pada device '{self.device}' ({e}). "
+                        "Mengalihkan (fallback) secara otomatis ke device 'cpu'..."
+                    )
+                    self._empty_accelerator_cache()
+                    self.device = "cpu"
+                    try:
+                        self._model = SentenceTransformer(
+                            self.model_name,
+                            trust_remote_code=True,
+                            device="cpu",
+                            model_kwargs={"local_files_only": True}
+                        )
+                    except Exception:
+                        self._model = SentenceTransformer(self.model_name, trust_remote_code=True, device="cpu")
+                else:
+                    self._model = SentenceTransformer(self.model_name, trust_remote_code=True, device=self.device)
         return self._model
 
     def _embed_via_sentence_transformers(self, texts: List[str]) -> List[List[float]]:
+        """Menghasilkan embedding dengan pemrosesan mini-batch aman dan mitigasi XPU OOM."""
+        if not texts:
+            return []
+
         model = self._get_sentence_transformer_model()
-        embeddings = model.encode(
-            texts,
-            batch_size=self.batch_size,
-            show_progress_bar=False,
-            normalize_embeddings=self.normalize
-        )
-        return embeddings.tolist()
+        effective_bs = self.batch_size
+        all_embeddings: List[List[float]] = []
+
+        total_texts = len(texts)
+        i = 0
+
+        while i < total_texts:
+            chunk_slice = texts[i : i + effective_bs]
+            sub_bs = len(chunk_slice)
+            success = False
+
+            while not success and sub_bs > 0:
+                current_input = chunk_slice[:sub_bs]
+                try:
+                    embeddings = model.encode(
+                        current_input,
+                        batch_size=sub_bs,
+                        show_progress_bar=False,
+                        normalize_embeddings=self.normalize
+                    )
+                    all_embeddings.extend(embeddings.tolist())
+                    i += sub_bs
+                    success = True
+
+                    # Bersihkan cache XPU setelah setiap mini-batch sukses
+                    if str(self.device).lower() == "xpu":
+                        self._empty_accelerator_cache()
+
+                except Exception as e:
+                    err_text = str(e).lower()
+                    if "out of memory" in err_text or "xpu out of memory" in err_text or "cuda out of memory" in err_text:
+                        logger.warning(
+                            f"Terdeteksi Out of Memory ({e.__class__.__name__}) pada batch size {sub_bs}. "
+                            "Mengosongkan cache memori (torch.xpu.empty_cache)..."
+                        )
+                        self._empty_accelerator_cache()
+
+                        if sub_bs > 1:
+                            sub_bs = max(1, sub_bs // 2)
+                            logger.info(f"Mencoba ulang dengan ukuran batch lebih kecil: {sub_bs}")
+                        else:
+                            # Jika batch size 1 sekalipun OOM di XPU, alihkan ke CPU
+                            logger.error(
+                                "XPU VRAM tidak mencukupi untuk 1 chunk sekalipun. "
+                                "Mengalihkan model ke CPU secara otomatis untuk menyelesaikan pemrosesan..."
+                            )
+                            try:
+                                self._empty_accelerator_cache()
+                                model = model.to("cpu")
+                                self.device = "cpu"
+                                embeddings = model.encode(
+                                    current_input,
+                                    batch_size=1,
+                                    show_progress_bar=False,
+                                    normalize_embeddings=self.normalize
+                                )
+                                all_embeddings.extend(embeddings.tolist())
+                                i += 1
+                                success = True
+                            except Exception as cpu_err:
+                                logger.error(f"Gagal memproses embedding bahkan pada CPU: {cpu_err}")
+                                raise cpu_err
+                    else:
+                        raise e
+
+        # Final memory cleanup
+        self._empty_accelerator_cache()
+        return all_embeddings
 
     def _embed_via_ollama(self, texts: List[str], is_query: bool = False) -> List[List[float]]:
         """Fallback atau integrasi embedding melalui API Ollama lokal."""

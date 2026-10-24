@@ -25,8 +25,8 @@ embedding:
   model_name: "nomic-ai/nomic-embed-text-v1.5"
   query_prefix: "search_query: "
   document_prefix: "search_document: "
-  batch_size: 256
-  device: "xpu" # atau "xpu" pada iGPU Intel Arc bila driver sycl/level-zero aktif
+  batch_size: 16 # Disetel 16 untuk mencegah XPU Out of Memory pada shared RAM Intel Arc iGPU
+  device: "xpu" # Pilihan: "xpu" (Intel Arc GPU) atau "cpu"
   normalize_embeddings: true
 
 # Modul Ingestion & Text Processing
