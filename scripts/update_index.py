@@ -91,9 +91,18 @@ def scan_folder_and_classify(
     """
     manifest_docs = manifest.get("documents", {})
 
+    # Indeks tambahan berdasarkan nama file agar tetap cocok baik dipindai dari ./data/raw maupun ./data/raw/SECRET
+    manifest_by_name: Dict[str, Tuple[str, Dict[str, Any]]] = {}
+    for k_path, m_val in manifest_docs.items():
+        fname = m_val.get("file_name") or Path(k_path).name
+        manifest_by_name[fname] = (k_path, m_val)
+        manifest_by_name[k_path] = (k_path, m_val)
+
+    raw_base_dir = (BASE_DIR / "data" / "raw").resolve()
+
     found_files = [
         p for p in target_dir.rglob("*")
-        if p.is_file() and p.suffix.lower() in supported_extensions
+        if p.is_file() and p.suffix.lower() in supported_extensions and "Zone.Identifier" not in p.name
     ]
 
     new_files = []
@@ -103,19 +112,27 @@ def scan_folder_and_classify(
 
     for file_path in found_files:
         try:
-            rel_path = str(file_path.relative_to(target_dir))
+            rel_path = str(file_path.resolve().relative_to(raw_base_dir))
         except ValueError:
-            rel_path = file_path.name
+            try:
+                rel_path = str(file_path.relative_to(target_dir))
+            except ValueError:
+                rel_path = file_path.name
 
         seen_rel_paths.add(rel_path)
+        seen_rel_paths.add(file_path.name)
         file_stat = file_path.stat()
         file_size = file_stat.st_size
         file_mtime = file_stat.st_mtime
         curr_hash = compute_file_hash(file_path)
 
+        matched_entry = manifest_by_name.get(rel_path) or manifest_by_name.get(file_path.name)
+        canonical_key = matched_entry[0] if matched_entry else rel_path
+        seen_rel_paths.add(canonical_key)
+
         file_info = {
             "path": file_path,
-            "rel_path": rel_path,
+            "rel_path": canonical_key,
             "name": file_path.name,
             "size": file_size,
             "mtime": file_mtime,
@@ -123,8 +140,8 @@ def scan_folder_and_classify(
         }
 
         # Cek apakah file sudah tercatat di manifest
-        if rel_path in manifest_docs:
-            old_meta = manifest_docs[rel_path]
+        if matched_entry:
+            _, old_meta = matched_entry
             old_hash = old_meta.get("sha256")
 
             if old_hash == curr_hash:
@@ -253,7 +270,10 @@ def run_incremental_update(
     manifest_path: Optional[Path] = None,
     output_json: bool = False,
     device: Optional[str] = None,
-    batch_size: Optional[int] = None
+    batch_size: Optional[int] = None,
+    from_colab: bool = False,
+    colab_url: Optional[str] = None,
+    colab_json_path: Optional[Path] = None
 ):
     manifest_file = manifest_path or MANIFEST_DEFAULT_PATH
     manifest = load_manifest(manifest_file)
@@ -343,13 +363,23 @@ def run_incremental_update(
             manifest["documents"].pop(del_rel, None)
         save_manifest(manifest, manifest_file)
 
-    # 5. Inisialisasi pipeline pemrosesan
+    # 5. Inisialisasi pipeline pemrosesan (atau ambil vektor pra-komputasi dari VM Google Colab)
+    colab_vectors_by_file: Dict[str, Dict[str, List[Any]]] = {}
+    if from_colab or colab_url or colab_json_path:
+        from scripts.pull_colab_index import fetch_colab_vectors_json, load_colab_vectors_by_filename
+        resolved_json = colab_json_path or fetch_colab_vectors_json(colab_url=colab_url)
+        colab_vectors_by_file = load_colab_vectors_by_filename(resolved_json)
+        logger.info(
+            f"Mode Colab Aktif: Memuat {len(colab_vectors_by_file)} dokumen dari '{resolved_json.name}'. "
+            "HANYA dokumen baru/berubah yang akan disimpan ke ChromaDB lokal!"
+        )
+
     loader = DocumentLoader(raw_dir=str(data_dir))
     if override_classification:
         loader.default_classification = override_classification.upper()
 
-    chunker = TextChunker()
-    engine = EmbeddingEngine(device=device, batch_size=batch_size)
+    chunker = None
+    engine = None
 
     total_chunks_added = 0
     start_time = time.time()
@@ -382,6 +412,53 @@ def run_incremental_update(
                     classification = potential_class
         except ValueError:
             pass
+
+        # JALUR A: Jika vektor dokumen baru ini sudah tersedia dari hasil GPU Google Colab
+        if f_name in colab_vectors_by_file:
+            c_bundle = colab_vectors_by_file[f_name]
+            c_ids = c_bundle["ids"]
+            c_docs = c_bundle["documents"]
+            c_metas = c_bundle["metadatas"]
+            c_embs = c_bundle["embeddings"]
+            b_sz = 200
+            for b_i in range(0, len(c_ids), b_sz):
+                vector_store.collection.upsert(
+                    ids=c_ids[b_i : b_i + b_sz],
+                    documents=c_docs[b_i : b_i + b_sz],
+                    metadatas=c_metas[b_i : b_i + b_sz],
+                    embeddings=c_embs[b_i : b_i + b_sz]
+                )
+            stored = len(c_ids)
+            total_chunks_added += stored
+
+            manifest["documents"][rel_path] = {
+                "file_name": f_name,
+                "file_path": str(f_path.resolve()),
+                "sha256": f_info["hash"],
+                "size_bytes": f_info["size"],
+                "mtime": f_info["mtime"],
+                "classification": classification,
+                "indexed_at": datetime.now().isoformat(),
+                "chunks_count": stored,
+                "status": "indexed_via_colab"
+            }
+            save_manifest(manifest, manifest_file)
+            logger.info(f"  -> [COLAB GPU] Sukses menyimpan {stored} chunks baru untuk '{f_name}' ke ChromaDB lokal.")
+            continue
+
+        if from_colab:
+            logger.warning(
+                f"  -> Dokumen baru '{f_name}' belum ditemukan di dalam bundel JSON Colab. "
+                "Jalankan `python scripts/sync_colab_notebook.py` lalu eksekusi notebook di Colab, "
+                "atau jalankan tanpa `--from-colab` untuk memproses secara lokal."
+            )
+            continue
+
+        # JALUR B: Pemrosesan lokal (jika tidak menggunakan --from-colab)
+        if chunker is None:
+            chunker = TextChunker()
+        if engine is None:
+            engine = EmbeddingEngine(device=device, batch_size=batch_size)
 
         # Ekstraksi halaman dokumen
         pages = loader.load_file(f_path, classification=classification)
@@ -479,6 +556,17 @@ Contoh Penggunaan:
     parser.add_argument("--device", type=str, default=None, help="Device embedding: xpu atau cpu (default dari config)")
     parser.add_argument("--batch-size", type=int, default=None, help="Batch size embedding (default: 16 untuk mencegah XPU OOM)")
     parser.add_argument("--json", action="store_true", help="Output laporan dalam format JSON")
+    parser.add_argument(
+        "--from-colab",
+        action="store_true",
+        help="Unduh/ambil hasil indexing dari VM Google Colab dan simpan HANYA dokumen baru ke ChromaDB lokal"
+    )
+    parser.add_argument(
+        "--colab-url",
+        type=str,
+        default=None,
+        help="URL download langsung file colab_indexed_vectors.json.xz dari output Sel 6 VM Google Colab"
+    )
 
     args = parser.parse_args()
 
@@ -490,6 +578,8 @@ Contoh Penggunaan:
         override_classification=args.classification,
         output_json=args.json,
         device=args.device,
-        batch_size=args.batch_size
+        batch_size=args.batch_size,
+        from_colab=args.from_colab or bool(args.colab_url),
+        colab_url=args.colab_url
     )
 
