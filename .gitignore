@@ -6,11 +6,19 @@ venv/
 env/
 .env
 
-# Data Mentah & Data Rahasia PUSDIKZI (Zero Data Leakage / Air-Gapped)
-data/raw/*
-!data/raw/.gitkeep
-data/processed/*
-!data/processed/.gitkeep
+# ==============================================================================
+# Keamanan Data Dokumen & Database Vektor PUSDIKZI (Zero Data Leakage / Air-Gapped)
+# Pastikan SELURUH file di dalam folder data/ TIDAK PERNAH terunggah ke GitHub
+# ==============================================================================
+data/**
+!data/**/
+!data/**/.gitkeep
+
+# File Arsip & Snapshot Kompresi
+*.zip
+*.xz
+*.tar.gz
+data_colab.zip
 
 # ChromaDB Data Storage (Local Container Volume)
 chroma_data/
@@ -26,4 +34,3 @@ huggingface/
 .idea/
 .DS_Store
 *.log
-
