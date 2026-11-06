@@ -1,6 +1,6 @@
 # RAG PUSDIKZI (Project Emas) - Knowledge Base System
 
-Sistem Retrieval-Augmented Generation (RAG) on-premise untuk Pusat Pendidikan Zeni (PUSDIKZI) TNI AD. Proyek ini mengintegrasikan dokumen operasional dan administratif dengan pengamanan berbasis klasifikasi (RBAC: `PUBLIC`, `INTERNAL`, `SECRET`) serta alur komputasi hybrid: **pemrosesan embedding di GPU Google Colab** dan **penyimpanan vektor di ChromaDB lokal**.
+Sistem Retrieval-Augmented Generation (RAG) on-premise. Proyek ini mengintegrasikan dokumen operasional dan administratif dengan pengamanan berbasis klasifikasi (RBAC: `PUBLIC`, `INTERNAL`, `SECRET`) serta alur komputasi hybrid: **pemrosesan embedding di GPU Google Colab** dan **penyimpanan vektor di ChromaDB lokal**.
 
 ---
 
