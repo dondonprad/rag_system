@@ -11,6 +11,7 @@ sys.path.insert(0, str(BASE_DIR))
 from config.settings import settings
 from src.embeddings.embedding_engine import EmbeddingEngine
 from src.vector_store.chroma_db import ChromaVectorStore
+from src.llm.ollama_client import OllamaClient
 
 logging.basicConfig(
     level=logging.INFO,
@@ -18,7 +19,7 @@ logging.basicConfig(
 )
 logger = logging.getLogger("test_retrieval")
 
-def run_query(query_text: str, n_results: int = 3, classification: str = None):
+def run_query(query_text: str, n_results: int = 3, classification: str = None, use_llm: bool = True):
     logger.info(f"Pertanyaan / Query: '{query_text}'")
     
     # 1. Hubungkan ke ChromaDB
@@ -65,12 +66,28 @@ def run_query(query_text: str, n_results: int = 3, classification: str = None):
             print(f"    Kutipan Teks:\n{res.get('content')}")
             print("-" * 60)
 
+    if use_llm:
+        print("\n" + "=" * 60)
+        print(" SINTESIS JAWABAN LLM LOKAL (OLLAMA + INTEL IPEX-LLM)")
+        print("=" * 60)
+        try:
+            llm_client = OllamaClient()
+            rag_res = llm_client.answer_with_context(query=query_text, retrieved_chunks=results)
+            print(f"Model         : {rag_res.get('model')} (4-bit GGUF/INT4)")
+            print(f"Status NoMatch: {rag_res.get('no_match')}")
+            print("-" * 60)
+            print(rag_res.get("answer", ""))
+            print("=" * 60)
+        except Exception as e:
+            logger.error(f"Gagal memanggil LLM Ollama IPEX-LLM: {e}")
+
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Uji coba retrieval vektor dari ChromaDB")
+    parser = argparse.ArgumentParser(description="Uji coba retrieval vektor dari ChromaDB & Sintesis LLM Lokal")
     parser.add_argument("query", type=str, help="Teks pertanyaan / kueri pencarian")
     parser.add_argument("--top-k", type=int, default=3, help="Jumlah hasil teratas")
     parser.add_argument("--access", type=str, default=None, help="Filter klasifikasi RBAC (e.g. INTERNAL, SECRET)")
+    parser.add_argument("--no-llm", action="store_true", help="Hanya tampilkan hasil retrieval tanpa sintesis LLM")
     args = parser.parse_args()
 
-    run_query(args.query, n_results=args.top_k, classification=args.access)
+    run_query(args.query, n_results=args.top_k, classification=args.access, use_llm=not args.no_llm)
 

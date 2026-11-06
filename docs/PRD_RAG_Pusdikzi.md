@@ -40,7 +40,7 @@ Pencarian manual atas ribuan halaman dokumen ini memakan waktu dan rentan *human
 - [x] **Fase 2 (Ingestion & Cleaning)**: Implementasi parsing multi-format (PDF, DOCX, XLSX/XLS, TXT, MD) berbasis pustaka lokal tanpa ketergantungan API pihak ketiga.
 - [x] **Fase 3 (Structure-Aware Chunking & Tokenizer)**: Standarisasi potongan 256 token dengan 10% overlap berbasis batasan semantik/paragraf.
 - [x] **Fase 4 (Embedding & Hybrid Pipeline)**: Integrasi model embedding `nomic-ai/nomic-embed-text-v1.5` dengan opsi lokal XPU (Intel Arc) serta pipeline otomatisasi inkremental via Google Colab GPU (`scripts/run_pipeline.py`).
-- [ ] **Fase 5 (LLM Integration - Sedang Berjalan)**: Menghubungkan hasil retrieval dengan engine LLM lokal (Ollama / IPEX-LLM / GGUF terkuantisasi) untuk sintesis jawaban dan antarmuka web interaktif (Open WebUI).
+- [x] **Fase 5 (LLM Integration - Selesai)**: Menghubungkan hasil retrieval dengan engine LLM lokal (`pusdikzi-ollama` dengan Intel IPEX-LLM SYCL GPU & model instruksi `qwen2.5-7b-int4` GGUF 4-bit) untuk sintesis jawaban berintegritas militer (*strict grounding*, *no-match handling*, dan sitasi wajib).
 
 ---
 
@@ -158,11 +158,13 @@ Pencarian manual atas ribuan halaman dokumen ini memakan waktu dan rentan *human
     where = {"klasifikasi": {"$in": allowed_classifications}}
     ```
 
-### 4.5 Modul API & Layanan Ekstraksi (`app/main.py`)
-- FastAPI service on-premise untuk parsing berkas independen:
-  - `POST /clean`: Membersihkan teks mentah dari boilerplate dan anomali.
-  - `POST /chunk`: Melakukan token-based chunking dan kalkulasi statistik.
-  - `POST /extract`: Menerima upload berkas PDF/DOCX/XLSX dan mengekstrak teks, tabel Markdown, serta metadata terstruktur.
+### 4.5 Modul API, Layanan Ekstraksi & Orkestrasi LLM (`app/main.py` & `src/llm/`)
+- FastAPI service on-premise untuk parsing berkas dan tanya-jawab RAG Militer:
+  - `POST /api/v1/clean`: Membersihkan teks mentah dari boilerplate dan anomali.
+  - `POST /api/v1/chunk`: Melakukan token-based chunking dan kalkulasi statistik.
+  - `POST /api/v1/parse` & `POST /api/v1/pipeline`: Menerima upload berkas PDF/DOCX/XLSX dan mengekstrak teks, tabel Markdown, serta metadata terstruktur.
+  - `POST /api/v1/query`: Endpoint tanya-jawab RAG yang mengintegrasikan retrieval ChromaDB dengan inferensi LLM lokal (`qwen2.5-7b-int4` via Ollama + Intel IPEX-LLM GPU), menerapkan *strict grounding*, deteksi *no match*, dan sitasi wajib (`[Dokumen: <Nama Dokumen>, Halaman: <Halaman>]`).
+  - `GET /api/v1/llm/status`: Memeriksa kesehatan koneksi container `pusdikzi-ollama` (Intel Arc GPU SYCL) dan `pusdikzi-chromadb`.
 
 ---
 
@@ -222,19 +224,25 @@ rag_pusdikzi/
 │   ├── pull_colab_index.py         # Ekstraktor payload ZIP dari Colab
 │   ├── update_index.py             # Injeksi inkremental chunk & vektor ke ChromaDB
 │   ├── check_database.py           # Utilitas inspeksi isi & koleksi ChromaDB
-│   └── test_retrieval.py           # CLI pengujian retrieval vektor dengan RBAC filtering
+│   ├── test_retrieval.py           # CLI pengujian retrieval vektor & sintesis LLM
+│   └── test_query.py               # CLI pengujian end-to-end RAG Militer (Strict Grounding, RBAC, No-Match)
 ├── src/
 │   ├── embeddings/
 │   │   └── embedding_engine.py     # SentenceTransformers engine (Nomic AI v1.5)
 │   ├── ingestion/
 │   │   ├── loaders.py              # File scanner & loader rekursif
 │   │   └── parsers.py              # Parser spesifik (PyMuPDF, docx, openpyxl, xlrd)
+│   ├── llm/
+│   │   ├── __init__.py
+│   │   └── ollama_client.py        # Client Ollama + IPEX-LLM Intel GPU & Prompt Engineering Militer
 │   ├── processing/
 │   │   ├── cleaner.py              # Normalisasi teks & sanitasi PII
 │   │   └── chunking.py             # Structure-aware tokenizer & chunker (256 tokens)
 │   └── vector_store/
 │       └── chroma_db.py            # Client ChromaDB (HTTP & Persistent) + Filter RBAC
-├── docker-compose.yml              # Deployment ChromaDB Docker on-premise (Port 8000)
+├── models/
+│   └── Modelfile.qwen2.5-7b-int4   # Konfigurasi Modelfile Qwen 2.5-7B 4-bit GGUF (Q4_K_M)
+├── docker-compose.yml              # Deployment ChromaDB (Port 8000) & Ollama IPEX-LLM Intel GPU (Port 11434)
 ├── requirements.txt                # Dependensi Python
 ├── .env.example                    # Template variabel lingkungan
 ├── .env                            # Konfigurasi aktif lokal

@@ -159,12 +159,13 @@ class ChromaVectorStore:
         if where_filter:
             final_where.update(where_filter)
 
-        # Terapkan filter RBAC keamanan jika ditentukan
+        # Terapkan filter RBAC keamanan jika ditentukan (normalisasi huruf kapital sesuai skema DB)
         if allowed_classifications:
-            if len(allowed_classifications) == 1:
-                final_where["classification"] = allowed_classifications[0]
-            else:
-                final_where["classification"] = {"$in": allowed_classifications}
+            norm_classes = list({c.strip().upper() for c in allowed_classifications if c and c.strip()})
+            if len(norm_classes) == 1:
+                final_where["classification"] = norm_classes[0]
+            elif len(norm_classes) > 1:
+                final_where["classification"] = {"$in": norm_classes}
 
         results = self.collection.query(
             query_embeddings=[query_embedding],

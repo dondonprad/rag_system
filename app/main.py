@@ -13,8 +13,31 @@ from config.settings import settings
 from src.ingestion.parsers import DocumentParser, DocumentPage
 from src.processing.cleaner import TextCleaner
 from src.processing.chunking import TextChunker, DocumentChunk
+from src.embeddings.embedding_engine import EmbeddingEngine
+from src.vector_store.chroma_db import ChromaVectorStore
+from src.llm import OllamaClient
 
 logger = logging.getLogger("fastapi_parsing_service")
+
+# Instantiate Ollama client (singleton) & lazy singletons untuk Embedding + ChromaDB
+ollama_client = OllamaClient()
+_embedding_engine: Optional[EmbeddingEngine] = None
+_vector_store: Optional[ChromaVectorStore] = None
+
+
+def get_embedding_engine() -> EmbeddingEngine:
+    global _embedding_engine
+    if _embedding_engine is None:
+        _embedding_engine = EmbeddingEngine()
+    return _embedding_engine
+
+
+def get_vector_store() -> ChromaVectorStore:
+    global _vector_store
+    if _vector_store is None or not _vector_store.is_healthy():
+        _vector_store = ChromaVectorStore()
+    return _vector_store
+
 
 # Inisialisasi FastAPI App
 app = FastAPI(
@@ -95,6 +118,7 @@ def root():
 
 @app.get("/health", tags=["Info"])
 def health():
+    vec_store = get_vector_store()
     return {
         "status": "healthy",
         "supported_formats": [".pdf", ".docx", ".xlsx", ".xls", ".doc", ".txt", ".md"],
@@ -105,7 +129,17 @@ def health():
             "unit": "tokens",
             "structure_aware": True
         },
-        "security_policy": "Zero Data Leakage / Air-Gapped"
+        "vector_store": {
+            "healthy": vec_store.is_healthy(),
+            "collection": vec_store.collection_name,
+        },
+        "llm_engine": {
+            "provider": "Ollama + Intel IPEX-LLM (SYCL GPU)",
+            "model": ollama_client.model,
+            "quantization": "4-bit (GGUF / INT4 Q4_K_M)",
+            "healthy": ollama_client.is_healthy(),
+        },
+        "security_policy": "Zero Data Leakage / Air-Gapped / Strict Grounding"
     }
 
 @app.post("/api/v1/clean", response_model=CleanResponse, tags=["Processing & Cleaning"])
@@ -316,6 +350,98 @@ def update_index_endpoint(req: UpdateIndexRequest):
         "skipped_unchanged": len(unch_f),
         "cleaned_deleted": len(del_f) if req.clean_deleted else 0
     }
+
+
+# --- RAG Query & On-Premise LLM Endpoints ---
+
+class QueryRequest(BaseModel):
+    query: str = Field(..., description="Pertanyaan pengguna untuk sistem RAG PUSDIKZI")
+    top_k: int = Field(5, description="Jumlah potongan konteks (chunk) teratas dari ChromaDB")
+    allowed_classifications: Optional[List[str]] = Field(
+        default=None,
+        description="Filter RBAC tingkat klasifikasi keamanan, misal ['INTERNAL'] atau ['INTERNAL', 'SECRET']"
+    )
+    max_distance: Optional[float] = Field(
+        default=None,
+        description="Ambang batas maksimum Cosine Distance untuk validasi relevansi konteks (default: 0.42)"
+    )
+
+
+class CitationItem(BaseModel):
+    document: str
+    page: int
+    classification: Optional[str] = "INTERNAL"
+    distance: Optional[float] = None
+    citation_tag: Optional[str] = None
+
+
+class QueryResponse(BaseModel):
+    answer: str
+    citations: List[CitationItem]
+    retrieved_chunks: List[Dict[str, Any]]
+    no_match: bool = False
+    model: str = "qwen2.5-7b-int4"
+
+
+@app.get("/api/v1/llm/status", tags=["RAG Query & LLM On-Premise"])
+def llm_status_endpoint():
+    """Memeriksa status container Ollama + IPEX-LLM Intel GPU serta koneksi database vektor ChromaDB."""
+    vec_store = get_vector_store()
+    chroma_healthy = vec_store.is_healthy()
+    return {
+        "llm": ollama_client.get_model_info(),
+        "chromadb": vec_store.get_stats() if chroma_healthy else {"healthy": False},
+    }
+
+
+@app.post("/api/v1/query", response_model=QueryResponse, tags=["RAG Query & LLM On-Premise"])
+def query_endpoint(req: QueryRequest):
+    """Endpoint RAG Militer PUSDIKZI terintegrasi ChromaDB & Ollama IPEX-LLM (Qwen 2.5-7B INT4):
+    - Context Injection & Prompt Engineering Militer
+    - Strict Grounding (Menjawab hanya berdasarkan potongan konteks dari ChromaDB)
+    - Penanganan kondisi No Match
+    - Penyertaan Sitasi Wajib (Nama Dokumen dan Halaman)
+    """
+    vec_store = get_vector_store()
+    if not vec_store.is_healthy():
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Layanan Vector Database ChromaDB sedang tidak aktif."
+        )
+
+    # 1. Embed query menggunakan EmbeddingEngine lokal
+    emb_engine = get_embedding_engine()
+    query_embedding = emb_engine.embed_query(req.query)
+
+    # 2. Cari potongan konteks relevan dari ChromaDB dengan filter RBAC
+    results = vec_store.search_similarity(
+        query_embedding=query_embedding,
+        n_results=req.top_k,
+        allowed_classifications=req.allowed_classifications,
+    )
+
+    # 3. Jalankan sintesis jawaban dengan Strict Grounding, No-Match Handling, & Sitasi Wajib
+    try:
+        rag_result = ollama_client.answer_with_context(
+            query=req.query,
+            retrieved_chunks=results,
+            max_distance_threshold=req.max_distance,
+        )
+    except Exception as e:
+        logger.error(f"Gagal memproses inferensi LLM pada Ollama IPEX-LLM: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail=f"Gagal menghubungi layanan LLM lokal (Ollama IPEX-LLM): {e}"
+        )
+
+    return QueryResponse(
+        answer=rag_result["answer"],
+        citations=rag_result["citations"],
+        retrieved_chunks=rag_result["retrieved_chunks"],
+        no_match=rag_result["no_match"],
+        model=rag_result.get("model", ollama_client.model),
+    )
+
 
 if __name__ == "__main__":
     import uvicorn

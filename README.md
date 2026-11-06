@@ -160,3 +160,19 @@ Menguji pencarian informasi dengan simulasi hak akses RBAC:
 # Pencarian khusus dengan hak akses SECRET:
 ./venv/bin/python scripts/test_retrieval.py "Struktur dan kesiapan personel satuan Zeni" --access SECRET
 ```
+
+### 3. Pengujian Tanya-Jawab RAG Terintegrasi LLM Lokal (Ollama + Intel IPEX-LLM GPU)
+Menguji sintesis jawaban berbasis *Strict Grounding*, penanganan kondisi *No Match*, dan Sitasi Wajib (`[Dokumen: <Nama Dokumen>, Halaman: <Halaman>]`) menggunakan model **Qwen 2.5-7B (4-bit GGUF / INT4)** pada container `pusdikzi-ollama`:
+```bash
+# Pastikan container ChromaDB (port 8000) dan Ollama IPEX-LLM (port 11434) aktif:
+docker compose up -d
+
+# Jalankan kueri tanya-jawab RAG tunggal:
+./venv/bin/python scripts/test_query.py "Dimana kedudukan PUSDIKZI dan apa tugas pokok Korps Zeni?"
+
+# Jalankan kueri dengan hak akses RBAC SECRET:
+./venv/bin/python scripts/test_query.py "Bagaimana prosedur penjinakan IED pada tim Jihandak?" --access SECRET
+
+# Jalankan paket pengujian otomatis 3 skenario (INTERNAL, SECRET, dan No-Match):
+./venv/bin/python scripts/test_query.py --suite
+```

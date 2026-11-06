@@ -72,6 +72,22 @@ hardware_mitigation:
   ollama:
     OLLAMA_NUM_PARALLEL: 1 # Pembatasan konkurensi agar RAM sistem tidak terkuras
 
+# Modul Local LLM On-Premise (Ollama + IPEX-LLM Intel Arc GPU)
+llm:
+  provider: "ollama-ipex-llm"
+  base_url: "http://localhost:11434"
+  model_name: "qwen2.5-7b-int4"
+  quantization: "Q4_K_M (4-bit GGUF/INT4)"
+  device: "Intel Arc iGPU (SYCL / Level-Zero)"
+  temperature: 0.1
+  top_p: 0.9
+  max_tokens: 512
+  num_ctx: 2048
+  top_k_retrieval: 3
+  max_distance_threshold: 0.42
+  strict_grounding: true
+  no_match_message: "Informasi tidak ditemukan dalam dokumen doktrin PUSDIKZI."
+
 # Document-Level RBAC & Security Classification
 security:
   enabled: true

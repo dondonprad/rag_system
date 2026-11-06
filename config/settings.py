@@ -77,6 +77,34 @@ def load_config() -> Dict[str, Any]:
         "DEFAULT_SECURITY_CLASSIFICATION", config["security"].get("default_classification", "INTERNAL")
     )
 
+    # Local LLM (Ollama + IPEX-LLM Intel GPU)
+    if "llm" not in config:
+        config["llm"] = {}
+    config["llm"]["base_url"] = os.getenv(
+        "OLLAMA_URL", config["llm"].get("base_url", "http://localhost:11434")
+    )
+    config["llm"]["model_name"] = os.getenv(
+        "OLLAMA_MODEL", config["llm"].get("model_name", "qwen2.5-7b-int4")
+    )
+    config["llm"]["temperature"] = float(
+        os.getenv("LLM_TEMPERATURE", config["llm"].get("temperature", 0.1))
+    )
+    config["llm"]["max_tokens"] = int(
+        os.getenv("LLM_MAX_TOKENS", config["llm"].get("max_tokens", 1024))
+    )
+    config["llm"]["num_ctx"] = int(
+        os.getenv("LLM_NUM_CTX", config["llm"].get("num_ctx", 4096))
+    )
+    config["llm"]["top_k_retrieval"] = int(
+        os.getenv("RAG_TOP_K", config["llm"].get("top_k_retrieval", 5))
+    )
+    config["llm"]["max_distance_threshold"] = float(
+        os.getenv("RAG_MAX_DISTANCE", config["llm"].get("max_distance_threshold", 0.42))
+    )
+    config["llm"]["no_match_message"] = config["llm"].get(
+        "no_match_message", "Informasi tidak ditemukan dalam dokumen doktrin PUSDIKZI."
+    )
+
     return config
 
 # Global config instance
