@@ -1,4 +1,4 @@
-# RAG PUSDIKZI (Project Emas) - Knowledge Base System
+# Project Emas - RAG Knowledge Base System
 
 Sistem Retrieval-Augmented Generation (RAG) on-premise. Proyek ini mengintegrasikan dokumen operasional dan administratif dengan pengamanan berbasis klasifikasi (RBAC: `PUBLIC`, `INTERNAL`, `SECRET`) serta alur komputasi hybrid: **pemrosesan embedding di GPU Google Colab** dan **penyimpanan vektor di ChromaDB lokal**.
 
@@ -158,20 +158,20 @@ Menguji pencarian informasi dengan simulasi hak akses RBAC:
 ./venv/bin/python scripts/test_retrieval.py "Bagaimana prosedur perizinan cuti dinas?"
 
 # Pencarian khusus dengan hak akses SECRET:
-./venv/bin/python scripts/test_retrieval.py "Struktur dan kesiapan personel satuan Zeni" --access SECRET
+./venv/bin/python scripts/test_retrieval.py "Struktur dan kesiapan personel operasional" --access SECRET
 ```
 
 ### 3. Pengujian Tanya-Jawab RAG Terintegrasi LLM Lokal (Ollama + Intel IPEX-LLM GPU)
-Menguji sintesis jawaban berbasis *Strict Grounding*, penanganan kondisi *No Match*, dan Sitasi Wajib (`[Dokumen: <Nama Dokumen>, Halaman: <Halaman>]`) menggunakan model **Qwen 2.5-7B (4-bit GGUF / INT4)** pada container `pusdikzi-ollama`:
+Menguji sintesis jawaban berbasis *Strict Grounding*, penanganan kondisi *No Match*, dan Sitasi Wajib (`[Dokumen: <Nama Dokumen>, Halaman: <Halaman>]`) menggunakan model **Qwen 2.5-7B (4-bit GGUF / INT4)** pada container Ollama lokal:
 ```bash
 # Pastikan container ChromaDB (port 8000) dan Ollama IPEX-LLM (port 11434) aktif:
 docker compose up -d
 
 # Jalankan kueri tanya-jawab RAG tunggal:
-./venv/bin/python scripts/test_query.py "Dimana kedudukan PUSDIKZI dan apa tugas pokok Korps Zeni?"
+./venv/bin/python scripts/test_query.py "Apa saja tugas pokok dan fungsi operasional organisasi?"
 
 # Jalankan kueri dengan hak akses RBAC SECRET:
-./venv/bin/python scripts/test_query.py "Bagaimana prosedur penjinakan IED pada tim Jihandak?" --access SECRET
+./venv/bin/python scripts/test_query.py "Bagaimana prosedur penanganan protokol keamanan khusus?" --access SECRET
 
 # Jalankan paket pengujian otomatis 3 skenario (INTERNAL, SECRET, dan No-Match):
 ./venv/bin/python scripts/test_query.py --suite
